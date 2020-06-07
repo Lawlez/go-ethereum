@@ -155,7 +155,7 @@ func (p *peerConnection) FetchHeaders(from uint64, count int) error {
 	}
 	p.headerStarted = time.Now()
 
-	// Issue the header retrieval request (absolut upwards without gaps)
+	// Issue the header retrieval request (absolute upwards without gaps)
 	go p.peer.RequestHeadersByNumber(from, count, 0, false)
 
 	return nil
@@ -227,13 +227,6 @@ func (p *peerConnection) FetchNodeData(hashes []common.Hash) error {
 // just now.
 func (p *peerConnection) SetHeadersIdle(delivered int) {
 	p.setIdle(p.headerStarted, delivered, &p.headerThroughput, &p.headerIdle)
-}
-
-// SetBlocksIdle sets the peer to idle, allowing it to execute new block retrieval
-// requests. Its estimated block retrieval throughput is updated with that measured
-// just now.
-func (p *peerConnection) SetBlocksIdle(delivered int) {
-	p.setIdle(p.blockStarted, delivered, &p.blockThroughput, &p.blockIdle)
 }
 
 // SetBodiesIdle sets the peer to idle, allowing it to execute block body retrieval
@@ -349,9 +342,10 @@ func (p *peerConnection) Lacks(hash common.Hash) bool {
 // peerSet represents the collection of active peer participating in the chain
 // download procedure.
 type peerSet struct {
-	peers       map[string]*peerConnection
-	newPeerFeed event.Feed
-	lock        sync.RWMutex
+	peers        map[string]*peerConnection
+	newPeerFeed  event.Feed
+	peerDropFeed event.Feed
+	lock         sync.RWMutex
 }
 
 // newPeerSet creates a new peer set top track the active download sources.
@@ -361,8 +355,14 @@ func newPeerSet() *peerSet {
 	}
 }
 
+// SubscribeNewPeers subscribes to peer arrival events.
 func (ps *peerSet) SubscribeNewPeers(ch chan<- *peerConnection) event.Subscription {
 	return ps.newPeerFeed.Subscribe(ch)
+}
+
+// SubscribePeerDrops subscribes to peer departure events.
+func (ps *peerSet) SubscribePeerDrops(ch chan<- *peerConnection) event.Subscription {
+	return ps.peerDropFeed.Subscribe(ch)
 }
 
 // Reset iterates over the current peer set, and resets each of the known peers
@@ -419,12 +419,15 @@ func (ps *peerSet) Register(p *peerConnection) error {
 // actions to/from that particular entity.
 func (ps *peerSet) Unregister(id string) error {
 	ps.lock.Lock()
-	defer ps.lock.Unlock()
-
-	if _, ok := ps.peers[id]; !ok {
+	p, ok := ps.peers[id]
+	if !ok {
+		defer ps.lock.Unlock()
 		return errNotRegistered
 	}
 	delete(ps.peers, id)
+	ps.lock.Unlock()
+
+	ps.peerDropFeed.Send(p)
 	return nil
 }
 
@@ -467,7 +470,7 @@ func (ps *peerSet) HeaderIdlePeers() ([]*peerConnection, int) {
 		defer p.lock.RUnlock()
 		return p.headerThroughput
 	}
-	return ps.idlePeers(62, 64, idle, throughput)
+	return ps.idlePeers(62, 65, idle, throughput)
 }
 
 // BodyIdlePeers retrieves a flat list of all the currently body-idle peers within
@@ -481,7 +484,7 @@ func (ps *peerSet) BodyIdlePeers() ([]*peerConnection, int) {
 		defer p.lock.RUnlock()
 		return p.blockThroughput
 	}
-	return ps.idlePeers(62, 64, idle, throughput)
+	return ps.idlePeers(62, 65, idle, throughput)
 }
 
 // ReceiptIdlePeers retrieves a flat list of all the currently receipt-idle peers
@@ -495,7 +498,7 @@ func (ps *peerSet) ReceiptIdlePeers() ([]*peerConnection, int) {
 		defer p.lock.RUnlock()
 		return p.receiptThroughput
 	}
-	return ps.idlePeers(63, 64, idle, throughput)
+	return ps.idlePeers(63, 65, idle, throughput)
 }
 
 // NodeDataIdlePeers retrieves a flat list of all the currently node-data-idle
@@ -509,7 +512,7 @@ func (ps *peerSet) NodeDataIdlePeers() ([]*peerConnection, int) {
 		defer p.lock.RUnlock()
 		return p.stateThroughput
 	}
-	return ps.idlePeers(63, 64, idle, throughput)
+	return ps.idlePeers(63, 65, idle, throughput)
 }
 
 // idlePeers retrieves a flat list of all currently idle peers satisfying the
@@ -538,10 +541,10 @@ func (ps *peerSet) idlePeers(minProtocol, maxProtocol int, idleCheck func(*peerC
 	return idle, total
 }
 
-// medianRTT returns the median RTT of te peerset, considering only the tuning
+// medianRTT returns the median RTT of the peerset, considering only the tuning
 // peers if there are more peers available.
 func (ps *peerSet) medianRTT() time.Duration {
-	// Gather all the currnetly measured round trip times
+	// Gather all the currently measured round trip times
 	ps.lock.RLock()
 	defer ps.lock.RUnlock()
 
