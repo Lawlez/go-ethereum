@@ -85,6 +85,8 @@ The dumpgenesis command dumps the genesis block configuration in JSON format to 
 			utils.CacheGCFlag,
 			utils.MetricsEnabledFlag,
 			utils.MetricsEnabledExpensiveFlag,
+			utils.MetricsHTTPFlag,
+			utils.MetricsPortFlag,
 			utils.MetricsEnableInfluxDBFlag,
 			utils.MetricsInfluxDBEndpointFlag,
 			utils.MetricsInfluxDBDatabaseFlag,
@@ -161,7 +163,7 @@ The export-preimages command export hash preimages to an RLP encoded stream`,
 			utils.RinkebyFlag,
 			utils.TxLookupLimitFlag,
 			utils.GoerliFlag,
-			utils.YoloV1Flag,
+			utils.YoloV2Flag,
 			utils.LegacyTestnetFlag,
 		},
 		Category: "BLOCKCHAIN COMMANDS",
@@ -211,7 +213,7 @@ Use "ethereum dump 0" to dump the genesis block.`,
 			utils.RopstenFlag,
 			utils.RinkebyFlag,
 			utils.GoerliFlag,
-			utils.YoloV1Flag,
+			utils.YoloV2Flag,
 			utils.LegacyTestnetFlag,
 			utils.SyncModeFlag,
 		},
@@ -237,8 +239,8 @@ func initGenesis(ctx *cli.Context) error {
 	if err := json.NewDecoder(file).Decode(genesis); err != nil {
 		utils.Fatalf("invalid genesis file: %v", err)
 	}
-	// Open an initialise both full and light databases
-	stack := makeFullNode(ctx)
+	// Open and initialise both full and light databases
+	stack, _ := makeConfigNode(ctx)
 	defer stack.Close()
 
 	for _, name := range []string{"chaindata", "lightchaindata"} {
@@ -275,7 +277,8 @@ func importChain(ctx *cli.Context) error {
 	utils.SetupMetrics(ctx)
 	// Start system runtime metrics collection
 	go metrics.CollectProcessMetrics(3 * time.Second)
-	stack := makeFullNode(ctx)
+
+	stack, _ := makeConfigNode(ctx)
 	defer stack.Close()
 
 	chain, db := utils.MakeChain(ctx, stack, false)
@@ -299,13 +302,17 @@ func importChain(ctx *cli.Context) error {
 	// Import the chain
 	start := time.Now()
 
+	var importErr error
+
 	if len(ctx.Args()) == 1 {
 		if err := utils.ImportChain(chain, ctx.Args().First()); err != nil {
+			importErr = err
 			log.Error("Import error", "err", err)
 		}
 	} else {
 		for _, arg := range ctx.Args() {
 			if err := utils.ImportChain(chain, arg); err != nil {
+				importErr = err
 				log.Error("Import error", "file", arg, "err", err)
 			}
 		}
@@ -358,14 +365,15 @@ func importChain(ctx *cli.Context) error {
 		utils.Fatalf("Failed to read database iostats: %v", err)
 	}
 	fmt.Println(ioStats)
-	return nil
+	return importErr
 }
 
 func exportChain(ctx *cli.Context) error {
 	if len(ctx.Args()) < 1 {
 		utils.Fatalf("This command requires an argument.")
 	}
-	stack := makeFullNode(ctx)
+
+	stack, _ := makeConfigNode(ctx)
 	defer stack.Close()
 
 	chain, _ := utils.MakeChain(ctx, stack, true)
@@ -400,7 +408,8 @@ func importPreimages(ctx *cli.Context) error {
 	if len(ctx.Args()) < 1 {
 		utils.Fatalf("This command requires an argument.")
 	}
-	stack := makeFullNode(ctx)
+
+	stack, _ := makeConfigNode(ctx)
 	defer stack.Close()
 
 	db := utils.MakeChainDatabase(ctx, stack)
@@ -418,7 +427,8 @@ func exportPreimages(ctx *cli.Context) error {
 	if len(ctx.Args()) < 1 {
 		utils.Fatalf("This command requires an argument.")
 	}
-	stack := makeFullNode(ctx)
+
+	stack, _ := makeConfigNode(ctx)
 	defer stack.Close()
 
 	db := utils.MakeChainDatabase(ctx, stack)
@@ -440,7 +450,7 @@ func copyDb(ctx *cli.Context) error {
 		utils.Fatalf("Source ancient chain directory path argument missing")
 	}
 	// Initialize a new chain for the running node to sync into
-	stack := makeFullNode(ctx)
+	stack, _ := makeConfigNode(ctx)
 	defer stack.Close()
 
 	chain, chainDb := utils.MakeChain(ctx, stack, false)
@@ -548,7 +558,7 @@ func confirmAndRemoveDB(database string, kind string) {
 }
 
 func dump(ctx *cli.Context) error {
-	stack := makeFullNode(ctx)
+	stack, _ := makeConfigNode(ctx)
 	defer stack.Close()
 
 	chain, chainDb := utils.MakeChain(ctx, stack, true)
